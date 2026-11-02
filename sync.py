@@ -80,6 +80,8 @@ class Catalog:
 
     def members(self, collection, group):
         collection_info = self.call(f"/api/catalog/pvt/collection/{collection}")
+        if str(collection_info.get("Type", "")).strip().lower() != "manual":
+            raise SyncError("La colección no es manual. Revisa sus reglas antes de migrarla.")
         groups = self.call(f"/api/catalog/pvt/collection/{collection}/subcollection")
         if not isinstance(groups, list) or len(groups) != 1:
             raise SyncError("Esta herramienta requiere una colección con un único grupo manual inclusivo. Revisa sus reglas antes de migrarla.")
@@ -89,11 +91,8 @@ class Catalog:
             raise SyncError("El grupo no es un grupo manual inclusivo de la colección indicada.")
         if int(groups[0]["Id"]) != group:
             raise SyncError("El grupo indicado no coincide con el de la colección.")
-        # Automatic category/brand rules can reinsert SKUs after a removal.
-        for rule in ("brand", "category"):
-            values = self.call(f"/api/catalog/pvt/subcollection/{group}/{rule}")
-            if values:
-                raise SyncError("El grupo tiene reglas de marca/categoría. No puede sincronizarse como grupo manual.")
+        # VTEX reports automatic/hybrid rules through the collection Type.
+        # The brand/category association endpoints do not document GET requests.
         members = set()
         page = 1
         total = None
