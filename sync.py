@@ -1,12 +1,15 @@
 """Reconcile one manual VTEX collection with storefront discounts."""
 import argparse
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
+import hashlib
 import json
 import os
 from pathlib import Path
 import re
 import sys
+import threading
 import time
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
@@ -23,6 +26,8 @@ class Catalog:
             raise SyncError("Nombre de cuenta inválido.")
         self.base = f"https://{account}.vtexcommercestable.com.br"
         self.channel = channel
+        self._request_lock = threading.Lock()
+        self._next_request = 0
         self.key = os.environ.get("VTEX_APP_KEY", "")
         self.token = os.environ.get("VTEX_APP_TOKEN", "")
         if not self.key or not self.token:
@@ -34,7 +39,11 @@ class Catalog:
             headers.update({"X-VTEX-API-AppKey": self.key, "X-VTEX-API-AppToken": self.token})
         data = None if body is None else json.dumps(body).encode()
         for attempt in range(5):
-            time.sleep(.15)
+            with self._request_lock:
+                delay = self._next_request - time.monotonic()
+                if delay > 0:
+                    time.sleep(delay)
+                self._next_request = time.monotonic() + .15
             try:
                 with urlopen(Request(self.base + path, data=data, headers=headers, method=method), timeout=45) as response:
                     result = response.read()
@@ -45,7 +54,8 @@ class Catalog:
                         delay = float(error.headers.get("Retry-After", 2 ** attempt))
                     except ValueError:
                         delay = 2 ** attempt
-                    time.sleep(min(max(delay, 1), 60))
+                    with self._request_lock:
+                        self._next_request = max(self._next_request, time.monotonic() + min(max(delay, 1), 60))
                     continue
                 raise SyncError(f"VTEX respondió HTTP {error.code} en {method} {path.split('?')[0]}.") from None
             except (URLError, TimeoutError, ValueError):
@@ -160,6 +170,83 @@ def save(path, data):
     temporary.replace(path)
 
 
+def scan(catalog, products, args, output):
+    identity = {
+        "version": 2, "account": args.account, "collection": args.collection,
+        "group": args.group, "channel": args.channel,
+        "catalogHash": hashlib.sha256(json.dumps(
+            [(product, sorted(skus)) for product, skus in sorted(products.items())]
+        ).encode()).hexdigest(),
+    }
+    checkpoint_path = output / "checkpoint.json"
+    started = time.time()
+    states = {}
+    if not args.apply and checkpoint_path.exists():
+        try:
+            previous = json.loads(checkpoint_path.read_text(encoding="utf-8"))
+            candidate = previous["states"]
+            age = time.time() - previous["startedAt"]
+            valid = (previous["identity"] == identity and 0 <= age < 7200
+                     and isinstance(candidate, dict)
+                     and all(key.isdigit() and int(key) in products and
+                             (type(value) is bool or value is None)
+                             for key, value in candidate.items()))
+            if valid:
+                states = candidate
+                started = previous["startedAt"]
+                print(f"Retomando {len(states)}/{len(products)} productos del informe reciente.", flush=True)
+            else:
+                print("El punto de avance venció o pertenece a otro catálogo; se consultará de nuevo.", flush=True)
+        except (OSError, ValueError, KeyError, TypeError):
+            print("Punto de avance no válido; se consultará de nuevo.", flush=True)
+    elif args.apply:
+        print("Modo aplicación: se consultarán todos los precios de nuevo, sin reutilizar el informe.", flush=True)
+
+    def persist():
+        save(checkpoint_path, {
+            "identity": identity, "startedAt": started,
+            "updatedAt": time.time(), "states": states,
+            "complete": len(states) == len(products),
+        })
+        save(output / "progress.json", {
+            "mode": "apply-scan" if args.apply else "report-only",
+            "productsScanned": len(states), "productsTotal": len(products),
+            "complete": len(states) == len(products),
+            "unknownProducts": sum(value is None for value in states.values()),
+            "checkpointContainsObservationsOnly": True,
+        })
+
+    persist()
+    remaining = iter((product, skus) for product, skus in sorted(products.items()) if str(product) not in states)
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        pending = {}
+
+        def submit_next():
+            item = next(remaining, None)
+            if item is not None:
+                product, skus = item
+                pending[executor.submit(catalog.discounted, product, skus)] = product
+
+        for _ in range(4):
+            submit_next()
+        try:
+            while pending:
+                done, _ = wait(pending, return_when=FIRST_COMPLETED)
+                for future in done:
+                    product = pending.pop(future)
+                    states[str(product)] = future.result()
+                    if len(states) % 25 == 0:
+                        persist()
+                        print(f"Consultados {len(states)}/{len(products)} productos.", flush=True)
+                    submit_next()
+        finally:
+            for future in pending:
+                future.cancel()
+            persist()
+    print(f"Revisión completa: {len(states)}/{len(products)} productos.", flush=True)
+    return states, started
+
+
 def run(args):
     output = Path(args.output).resolve()
     output.mkdir(parents=True, exist_ok=True)
@@ -171,20 +258,22 @@ def run(args):
     os.close(descriptor)
     try:
         catalog = Catalog(args.account, args.channel)
+        print("Leyendo la colección y sus miembros...", flush=True)
         current, name = catalog.members(args.collection, args.group)
+        print("Leyendo el catálogo completo...", flush=True)
         products = catalog.products()
+        print(f"Revisando {len(products)} productos con hasta cuatro consultas simultáneas y límite global de peticiones.", flush=True)
+        states, scan_started = scan(catalog, products, args, output)
         wanted = set(current)
         unknown = []
-        for index, (product, skus) in enumerate(sorted(products.items()), 1):
-            discount = catalog.discounted(product, skus)
+        for product, skus in sorted(products.items()):
+            discount = states[str(product)]
             if discount is True:
                 wanted.update(skus)
             elif discount is False:
                 wanted.difference_update(skus)
             else:
                 unknown.append(product)
-            if index % 100 == 0:
-                print(f"Consultados {index}/{len(products)} productos.", flush=True)
         additions = sorted(wanted - current)
         removals = sorted(current - wanted)
         report = {
@@ -193,6 +282,8 @@ def run(args):
             "collectionName": name, "subCollectionId": args.group,
             "salesChannel": args.channel, "criterion": "any own-seller SKU with 0 < Price < ListPrice",
             "mode": "apply" if args.apply else "report-only",
+            "scanStartedAt": datetime.fromtimestamp(scan_started, timezone.utc).isoformat(),
+            "complete": True,
             "productsScanned": len(products), "unknownProductsPreserved": unknown,
             "addSkuIds": additions, "removeSkuIds": removals, "completed": [],
         }

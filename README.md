@@ -23,6 +23,16 @@ La programación queda desactivada mientras `OUTLET_SCHEDULE_ENABLED` no sea exa
 
 El trabajo usa Ubuntu, tiene un límite de 45 minutos y evita ejecuciones simultáneas dentro de este workflow. Empezar con un informe para medir la duración. Revisar el presupuesto de Actions y el almacenamiento compartido de la cuenta para mantenerse dentro de las cuotas gratuitas; el archivo no configura ni garantiza el presupuesto de GitHub.
 
+### Revisión paralela y recuperación de avance
+
+- Hasta cuatro consultas de precios simultáneas, con un límite global aproximado de 6.7 inicios de petición por segundo y pausa compartida ante respuestas 429/5xx.
+- Se guardan `checkpoint.json` y `progress.json` al comenzar y cada 25 productos. El informe final `plan-*.json` solo aparece al completar el catálogo.
+- GitHub intenta conservar el checkpoint en caché y sube los informes disponibles como artefactos incluso si el paso falla. Una cancelación forzada de todo el runner puede impedir esos pasos; no es almacenamiento garantizado.
+- Una ejecución nueva de informe puede retomar las observaciones guardadas si tienen menos de dos horas y coinciden la cuenta, colección, grupo, canal y todos los IDs de producto/SKU. El log indica cuántos productos se recuperaron. No se reutilizan puntos de avance de la versión anterior que no guardaba archivos.
+- El modo de aplicación ignora los resultados en caché y vuelve a consultar los precios. Los informes recuperados pueden contener precios observados hasta dos horas antes; se muestran con la fecha de inicio del escaneo. No se aplican directamente desde un archivo de informe.
+- `progress.json` y `checkpoint.json` son archivos parciales de diagnóstico, no autorizaciones para dar de baja productos. El programa no modifica asociaciones antes de completar el escaneo y releer la colección.
+- No se ha medido todavía la duración de esta versión contra la cuenta real. Las mejoras buscan evitar repetir los 45 minutos del escaneo secuencial de 10,376 productos.
+
 La regla de protección de bajas superiores al 25% sigue activa. Una aplicación puede quedar parcial si falla o alcanza su límite de tiempo: revisar el informe y recalcular antes de continuar.
 
 ## Regla preparada
@@ -37,7 +47,7 @@ La regla de protección de bajas superiores al 25% sigue activa. Una aplicación
 ## Datos que faltan
 
 1. Confirmar colección 138, canal comercial de la web y grupo manual (`SubCollectionId`).
-2. Revisar las reglas actuales de la colección. Este programa exige un único grupo inclusivo manual, sin reglas de categoría/marca ni banderas de preventa/lanzamiento. Si la colección es compleja, hay que planificar su migración antes de aplicar cambios.
+2. Revisar el tipo de la colección. Este programa exige `Type=Manual` y un único grupo inclusivo, sin banderas de preventa/lanzamiento. Las colecciones automáticas o híbridas no se modifican.
 3. Crear un token nuevo y asignar permisos de lectura del catálogo y colecciones y de edición de asociaciones de SKU. La herramienta no necesita permisos de precios, órdenes, clientes o pagos.
 4. Configurar GitHub Actions como se indica arriba, o elegir otro servidor/equipo para ejecutarlo con regularidad. La programación de GitHub viene desactivada inicialmente.
 
