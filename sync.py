@@ -146,6 +146,20 @@ class Catalog:
                 uncertain = True
             for seller in own_sellers:
                 offer = seller.get("commertialOffer", {})
+                if offer.get("IsAvailable") is False:
+                    known = True
+                    continue
+                try:
+                    quantity = Decimal(str(offer.get("AvailableQuantity")))
+                    if not quantity.is_finite() or quantity < 0:
+                        uncertain = True
+                        continue
+                except InvalidOperation:
+                    uncertain = True
+                    continue
+                if quantity == 0:
+                    known = True
+                    continue
                 try:
                     price = Decimal(str(offer.get("Price")))
                     original = Decimal(str(offer.get("ListPrice")))
@@ -172,7 +186,7 @@ def save(path, data):
 
 def scan(catalog, products, args, output):
     identity = {
-        "version": 2, "account": args.account, "collection": args.collection,
+        "version": 3, "account": args.account, "collection": args.collection,
         "group": args.group, "channel": args.channel,
         "catalogHash": hashlib.sha256(json.dumps(
             [(product, sorted(skus)) for product, skus in sorted(products.items())]
@@ -280,7 +294,8 @@ def run(args):
             "createdAt": datetime.now(timezone.utc).isoformat(),
             "account": args.account, "collectionId": args.collection,
             "collectionName": name, "subCollectionId": args.group,
-            "salesChannel": args.channel, "criterion": "any own-seller SKU with 0 < Price < ListPrice",
+            "salesChannel": args.channel,
+            "criterion": "any own-seller SKU with AvailableQuantity > 0, IsAvailable != false and 0 < Price < ListPrice",
             "mode": "apply" if args.apply else "report-only",
             "scanStartedAt": datetime.fromtimestamp(scan_started, timezone.utc).isoformat(),
             "complete": True,
