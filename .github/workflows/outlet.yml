@@ -1,0 +1,65 @@
+name: Sincronizar Outlet VTEX
+
+on:
+  workflow_dispatch:
+    inputs:
+      apply_changes:
+        description: Aplicar altas y bajas en VTEX (desactivado = solo informe)
+        type: boolean
+        required: true
+        default: false
+  schedule:
+    - cron: '17 12 * * *'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: outlet-adidasgt
+  cancel-in-progress: false
+
+jobs:
+  synchronize:
+    if: github.event_name == 'workflow_dispatch' || vars.OUTLET_SCHEDULE_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Obtener código
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: Preparar Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
+      - name: Calcular informe o sincronizar
+        env:
+          VTEX_APP_KEY: ${{ secrets.VTEX_APP_KEY }}
+          VTEX_APP_TOKEN: ${{ secrets.VTEX_APP_TOKEN }}
+          OUTLET_GROUP_ID: ${{ vars.OUTLET_GROUP_ID }}
+          VTEX_SALES_CHANNEL: ${{ vars.VTEX_SALES_CHANNEL }}
+          APPLY_CHANGES: ${{ github.event_name == 'workflow_dispatch' && inputs.apply_changes || github.event_name == 'schedule' && vars.OUTLET_APPLY_CHANGES == 'true' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -z "$VTEX_APP_KEY" || -z "$VTEX_APP_TOKEN" ]]; then
+            echo 'Faltan los secretos VTEX_APP_KEY y VTEX_APP_TOKEN.' >&2
+            exit 1
+          fi
+          if [[ ! "$OUTLET_GROUP_ID" =~ ^[1-9][0-9]*$ || ! "$VTEX_SALES_CHANNEL" =~ ^[1-9][0-9]*$ ]]; then
+            echo 'Configura OUTLET_GROUP_ID y VTEX_SALES_CHANNEL con los IDs confirmados.' >&2
+            exit 1
+          fi
+          arguments=(--account adidasgt --collection 138 --group "$OUTLET_GROUP_ID" --channel "$VTEX_SALES_CHANNEL")
+          if [[ "$APPLY_CHANGES" == 'true' ]]; then
+            arguments+=(--apply)
+          fi
+          python -u sync.py "${arguments[@]}"
+      - name: Guardar informe
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: outlet-informe-${{ github.run_id }}-${{ github.run_attempt }}
+          path: reports/*.json
+          if-no-files-found: warn
+          retention-days: 7
