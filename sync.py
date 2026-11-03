@@ -276,18 +276,26 @@ def run(args):
         products = catalog.products()
         print(f"Revisando {len(products)} productos con hasta cuatro consultas simultáneas y límite global de peticiones.", flush=True)
         states, scan_started = scan(catalog, products, args, output)
-        wanted = set(current)
+        product_by_sku = {sku: product for product, skus in products.items() for sku in skus}
+        def collection_products(members):
+            return {product_by_sku[sku] for sku in members if sku in product_by_sku}
+
+        current_products = collection_products(current)
+        wanted = set(current_products)
         unknown = []
         for product, skus in sorted(products.items()):
             discount = states[str(product)]
             if discount is True:
-                wanted.update(skus)
+                if skus:
+                    wanted.add(product)
             elif discount is False:
-                wanted.difference_update(skus)
+                wanted.discard(product)
             else:
                 unknown.append(product)
-        additions = sorted(wanted - current)
-        removals = sorted(current - wanted)
+        add_products = wanted - current_products
+        remove_products = current_products - wanted
+        additions = sorted(min(products[product]) for product in add_products)
+        removals = sorted(sku for sku in current if product_by_sku.get(sku) in remove_products)
         report = {
             "createdAt": datetime.now(timezone.utc).isoformat(),
             "account": args.account, "collectionId": args.collection,
@@ -299,13 +307,14 @@ def run(args):
             "complete": True,
             "productsScanned": len(products), "unknownProductsPreserved": unknown,
             "addSkuIds": additions, "removeSkuIds": removals, "completed": [],
+            "addProductIds": sorted(add_products), "removeProductIds": sorted(remove_products),
         }
         report_path = output / f"plan-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%fZ')}.json"
         save(report_path, report)
         print(f"Propuesta: añadir {len(additions)} SKU y retirar {len(removals)} SKU. Informe: {report_path}")
         if not args.apply:
             return
-        if current and len(removals) / len(current) > .25 and not args.allow_large_removal:
+        if current_products and len(remove_products) / len(current_products) > .25 and not args.allow_large_removal:
             raise SyncError("La baja supera el 25% de la colección. Revisa el informe antes de usar --allow-large-removal.")
         latest, _ = catalog.members(args.collection, args.group)
         if latest != current:
@@ -319,9 +328,10 @@ def run(args):
                     catalog.call(f"{path}/{sku}", "DELETE")
                 report["completed"].append({"action": action, "skuId": sku})
                 save(report_path, report)
-        verified, _ = catalog.members(args.collection, args.group)
-        report["unverifiedAddSkuIds"] = sorted(wanted - verified)
-        report["unverifiedRemoveSkuIds"] = sorted(verified - wanted)
+        verified_skus, _ = catalog.members(args.collection, args.group)
+        verified = collection_products(verified_skus)
+        report["unverifiedAddProductIds"] = sorted(wanted - verified)
+        report["unverifiedRemoveProductIds"] = sorted(verified - wanted)
         if verified != wanted:
             save(report_path, report)
             raise SyncError("La colección aún difiere del plan aplicado. Revisa las asociaciones pendientes en el informe.")
