@@ -28,7 +28,7 @@ El trabajo usa Ubuntu, tiene un límite de 45 minutos y evita ejecuciones simult
 - Hasta cuatro consultas de precios simultáneas, con un límite global aproximado de 6.7 inicios de petición por segundo y pausa compartida ante respuestas 429/5xx.
 - Se guardan `checkpoint.json` y `progress.json` al comenzar y cada 25 productos. El informe final `plan-*.json` solo aparece al completar el catálogo.
 - GitHub intenta conservar el checkpoint en caché y sube los informes disponibles como artefactos incluso si el paso falla. Una cancelación forzada de todo el runner puede impedir esos pasos; no es almacenamiento garantizado.
-- Una ejecución nueva de informe puede retomar las observaciones guardadas si tienen menos de dos horas y coinciden la cuenta, colección, grupo, canal y todos los IDs de producto/SKU. El log indica cuántos productos se recuperaron. La versión 3 invalida los puntos de avance anteriores para volver a evaluar los descuentos con existencias.
+- Una ejecución nueva de informe puede retomar las observaciones guardadas si tienen menos de dos horas y coinciden la cuenta, colección, grupo, canal y todos los IDs de producto/SKU. El log indica cuántos productos se recuperaron. La versión 4 invalida los puntos de avance anteriores para volver a evaluar los descuentos con existencias.
 - El modo de aplicación ignora los resultados en caché y vuelve a consultar los precios. Los informes recuperados pueden contener precios observados hasta dos horas antes; se muestran con la fecha de inicio del escaneo. No se aplican directamente desde un archivo de informe.
 - `progress.json` y `checkpoint.json` son archivos parciales de diagnóstico, no autorizaciones para dar de baja productos. El programa no modifica asociaciones antes de completar el escaneo y releer la colección.
 - No se ha medido todavía la duración de esta versión contra la cuenta real. Las mejoras buscan evitar repetir los 45 minutos del escaneo secuencial de 10,376 productos.
@@ -40,7 +40,7 @@ La regla de protección de bajas superiores al 25% sigue activa. Una aplicación
 - Un producto califica si al menos una de sus variantes del vendedor propio (`sellerId=1`) tiene `0 < Price < ListPrice`, `AvailableQuantity > 0` y no está marcada como no disponible en el canal indicado. Los descuentos de tallas agotadas no califican.
 - Se asocian todos los SKU de ese producto al grupo manual de la colección. No se modifican precios ni inventario.
 - Si ningún SKU disponible tiene descuento y todas las variantes pueden evaluarse, se retiran sus asociaciones del grupo. Una oferta confirmada sin existencias no necesita un precio válido para descartarse.
-- Si falta un producto, un SKU o un precio, se conserva su estado anterior y se incluye en el informe como desconocido. Esto también significa que los productos no visibles en el canal no se depuran automáticamente.
+- Las variantes ausentes de la oferta pública no cuentan. Si el producto no se publica o una oferta publicada no puede evaluarse, se conserva su estado anterior y se incluye en el informe como desconocido. Esto también significa que los productos no visibles en el canal no se depuran automáticamente.
 - Las promociones de carrito, cupones o precios personalizados no se consideran salvo que estén reflejados en `Price` frente a `ListPrice` del catálogo público.
 - La URL de Outlet se conserva si ya apunta a la colección administrada. El ID 138 se toma de la captura histórica; requiere confirmación de la configuración actual.
 

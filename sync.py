@@ -127,7 +127,7 @@ class Catalog:
             page += 1
         return members, collection_info.get("Name")
 
-    def discounted(self, product, expected_skus):
+    def discounted(self, product):
         params = urlencode({"fq": f"productId:{product}", "sc": self.channel})
         result = self.call(f"/api/catalog_system/pub/products/search?{params}", private=False)
         if not isinstance(result, list):
@@ -138,8 +138,6 @@ class Catalog:
         known = False
         uncertain = False
         items = matching[0].get("items", [])
-        if not expected_skus.issubset({int(sku["itemId"]) for sku in items}):
-            uncertain = True
         for sku in items:
             own_sellers = [seller for seller in sku.get("sellers", []) if str(seller.get("sellerId")) == "1"]
             if not own_sellers:
@@ -186,7 +184,7 @@ def save(path, data):
 
 def scan(catalog, products, args, output):
     identity = {
-        "version": 3, "account": args.account, "collection": args.collection,
+        "version": 4, "account": args.account, "collection": args.collection,
         "group": args.group, "channel": args.channel,
         "catalogHash": hashlib.sha256(json.dumps(
             [(product, sorted(skus)) for product, skus in sorted(products.items())]
@@ -231,15 +229,15 @@ def scan(catalog, products, args, output):
         })
 
     persist()
-    remaining = iter((product, skus) for product, skus in sorted(products.items()) if str(product) not in states)
+    remaining = iter(product for product in sorted(products) if str(product) not in states)
     with ThreadPoolExecutor(max_workers=4) as executor:
         pending = {}
 
         def submit_next():
             item = next(remaining, None)
             if item is not None:
-                product, skus = item
-                pending[executor.submit(catalog.discounted, product, skus)] = product
+                product = item
+                pending[executor.submit(catalog.discounted, product)] = product
 
         for _ in range(4):
             submit_next()
@@ -321,6 +319,12 @@ def run(args):
                     catalog.call(f"{path}/{sku}", "DELETE")
                 report["completed"].append({"action": action, "skuId": sku})
                 save(report_path, report)
+        verified, _ = catalog.members(args.collection, args.group)
+        report["unverifiedAddSkuIds"] = sorted(wanted - verified)
+        report["unverifiedRemoveSkuIds"] = sorted(verified - wanted)
+        if verified != wanted:
+            save(report_path, report)
+            raise SyncError("La colección aún difiere del plan aplicado. Revisa las asociaciones pendientes en el informe.")
         report["finishedAt"] = datetime.now(timezone.utc).isoformat()
         save(report_path, report)
         print("Sincronización completada. La tienda puede tardar en reflejar la indexación.")
