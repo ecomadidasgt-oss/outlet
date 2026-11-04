@@ -38,7 +38,7 @@ La regla de protección de bajas superiores al 25% sigue activa. Una aplicación
 ## Regla preparada
 
 - Un producto califica si al menos una de sus variantes del vendedor propio (`sellerId=1`) tiene `0 < Price < ListPrice`, `AvailableQuantity > 0` y no está marcada como no disponible en el canal indicado. Los descuentos de tallas agotadas no califican.
-- La pertenencia se compara por producto. Para un alta se envía un SKU representativo y para una baja se usan los SKU que devuelve la colección. Tras aplicar, se verifica la pertenencia por producto. No se modifican precios ni inventario.
+- La pertenencia se compara por producto. Para un alta se envía un SKU representativo y para una baja se recorren todos los SKU del producto en el catálogo. Tras aplicar, se verifica la pertenencia por producto. No se modifican precios ni inventario.
 - Si ningún SKU disponible tiene descuento y todas las variantes pueden evaluarse, se retiran sus asociaciones del grupo. Una oferta confirmada sin existencias no necesita un precio válido para descartarse.
 - Las variantes ausentes de la oferta pública no cuentan. Si el producto no se publica o una oferta publicada no puede evaluarse, se conserva su estado anterior y se incluye en el informe como desconocido. Esto también significa que los productos no visibles en el canal no se depuran automáticamente.
 - Las promociones de carrito, cupones o precios personalizados no se consideran salvo que estén reflejados en `Price` frente a `ListPrice` del catálogo público.

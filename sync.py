@@ -33,7 +33,7 @@ class Catalog:
         if not self.key or not self.token:
             raise SyncError("Configura VTEX_APP_KEY y VTEX_APP_TOKEN en el entorno del servidor.")
 
-    def call(self, path, method="GET", body=None, private=True):
+    def call(self, path, method="GET", body=None, private=True, missing_ok=False):
         headers = {"Accept": "application/json", "Content-Type": "application/json"}
         if private:
             headers.update({"X-VTEX-API-AppKey": self.key, "X-VTEX-API-AppToken": self.token})
@@ -49,6 +49,8 @@ class Catalog:
                     result = response.read()
                     return json.loads(result) if result else None
             except HTTPError as error:
+                if missing_ok and method == "DELETE" and error.code == 404:
+                    return None
                 if error.code in (429, 500, 502, 503, 504) and attempt < 4:
                     try:
                         delay = float(error.headers.get("Retry-After", 2 ** attempt))
@@ -295,7 +297,7 @@ def run(args):
         add_products = wanted - current_products
         remove_products = current_products - wanted
         additions = sorted(min(products[product]) for product in add_products)
-        removals = sorted(sku for sku in current if product_by_sku.get(sku) in remove_products)
+        removals = sorted(sku for product in remove_products for sku in products[product])
         report = {
             "createdAt": datetime.now(timezone.utc).isoformat(),
             "account": args.account, "collectionId": args.collection,
@@ -325,7 +327,7 @@ def run(args):
                 if action == "add":
                     catalog.call(path, "POST", {"SkuId": sku})
                 else:
-                    catalog.call(f"{path}/{sku}", "DELETE")
+                    catalog.call(f"{path}/{sku}", "DELETE", missing_ok=True)
                 report["completed"].append({"action": action, "skuId": sku})
                 save(report_path, report)
         verified_skus, _ = catalog.members(args.collection, args.group)
